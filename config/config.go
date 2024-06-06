@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"github.com/TNK-Studio/gortal/passhs"
 	"io/ioutil"
 	"log"
 
@@ -25,10 +26,17 @@ func init() {
 	}
 }
 
+type LDAPConfig struct {
+	URI string `yaml:"uri"`
+	DN  string `yaml:"dn"`
+	FDN string `yaml:"fdn"`
+}
+
 // Config config
 type Config struct {
 	Users   *map[string]*User   `yaml:"users"`
 	Servers *map[string]*Server `yaml:"servers"`
+	LDAP    LDAPConfig          `yaml:"ldap"`
 }
 
 // User gortal login user
@@ -103,9 +111,11 @@ func (c *Config) SaveTo(path string) error {
 // AddUser add user to config
 func (c *Config) AddUser(username string, password string, IsAdmin bool, pubKey string) (string, *User) {
 	// Todo Add sha256 password
+	passHs, _ := passhs.PasswordHash(password)
+
 	user := &User{
 		Username:   username,
-		HashPasswd: password,
+		HashPasswd: passHs,
 		Admin:      IsAdmin,
 		PublicKey:  pubKey,
 	}

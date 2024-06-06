@@ -1,18 +1,20 @@
 package main
 
 import (
+	"encoding/base64"
 	"flag"
 	"fmt"
-	"log"
-	"time"
-	"encoding/base64"
-
 	"github.com/TNK-Studio/gortal/config"
 	"github.com/TNK-Studio/gortal/core/jump"
 	"github.com/TNK-Studio/gortal/core/sshd"
 	"github.com/TNK-Studio/gortal/utils"
 	"github.com/TNK-Studio/gortal/utils/logger"
-	"github.com/elfgzp/ssh"
+	myssh "github.com/elfgzp/ssh"
+	"github.com/go-ldap/ldap"
+	"golang.org/x/crypto/ssh"
+	"log"
+	"os"
+	"time"
 )
 
 var (
@@ -24,16 +26,30 @@ var (
 
 func init() {
 	Port = flag.Int("p", 2222, "Port")
-	hostKeyFile = flag.String("hk", "~/.ssh/id_rsa", "Host key file")
+	hostKeyFile = flag.String("hk", ".ssh/id_rsa", "Host key file")
 }
 
-func passwordAuth(ctx ssh.Context, pass string) bool {
+func passwordAuth(ctx myssh.Context, pass string) bool {
 	config.Conf.ReadFrom(*config.ConfPath)
 	var success bool
 	if (len(*config.Conf.Users)) < 1 {
 		success = (pass == "newuser")
 	} else {
-		success = jump.VarifyUser(ctx, pass)
+		l, err := ldap.Dial("tcp", config.Conf.LDAP.URI)
+		if err != nil {
+			fmt.Println("连接失败", err)
+			return false
+		}
+		sdn := fmt.Sprintf(config.Conf.LDAP.FDN, ctx.User())
+		err = l.Bind(sdn, pass)
+		if err != nil {
+			fmt.Println("管理员认证失败", err)
+			success = jump.VarifyUser(ctx, pass)
+
+		} else {
+			success = true
+			fmt.Println("succcess")
+		}
 	}
 	if !success {
 		time.Sleep(time.Second * 3)
@@ -41,23 +57,23 @@ func passwordAuth(ctx ssh.Context, pass string) bool {
 	return success
 }
 
-func publickKeyAuth(ctx ssh.Context, key ssh.PublicKey) bool {
+func publickKeyAuth(ctx myssh.Context, key myssh.PublicKey) bool {
 	var pub string
 
 	config.Conf.ReadFrom(*config.ConfPath)
 	username := ctx.User()
 	for _, user := range *config.Conf.Users {
-		if user.Username == username  {
+		if user.Username == username {
 			pub = user.PublicKey
 		}
 	}
 	decodeBytes, _ := base64.StdEncoding.DecodeString(pub)
-	allowed, _, _, _, _ := ssh.ParseAuthorizedKey(decodeBytes)
+	allowed, _, _, _, _ := myssh.ParseAuthorizedKey(decodeBytes)
 
-	return ssh.KeysEqual(key, allowed)
+	return myssh.KeysEqual(key, allowed)
 }
 
-func sessionHandler(sess *ssh.Session) {
+func sessionHandler(sess *myssh.Session) {
 	defer func() {
 		(*sess).Close()
 	}()
@@ -77,12 +93,12 @@ func sessionHandler(sess *ssh.Session) {
 	}
 }
 
-func sshHandler(sess *ssh.Session) {
+func sshHandler(sess *myssh.Session) {
 	jps := jump.Service{}
 	jps.Run(sess)
 }
 
-func scpHandler(args []string, sess *ssh.Session) {
+func scpHandler(args []string, sess *myssh.Session) {
 	sshd.ExecuteSCP(args, sess)
 }
 
@@ -93,7 +109,7 @@ func main() {
 		sshd.GenKey(*hostKeyFile)
 	}
 
-	ssh.Handle(func(sess ssh.Session) {
+	myssh.Handle(func(sess myssh.Session) {
 		defer func() {
 			if e, ok := recover().(error); ok {
 				logger.Logger.Panic(e)
@@ -103,12 +119,47 @@ func main() {
 	})
 
 	log.Printf("starting ssh server on port %d...\n", *Port)
-	log.Fatal(ssh.ListenAndServe(
+	log.Fatal(myssh.ListenAndServe(
 		fmt.Sprintf(":%d", *Port),
 		nil,
-		ssh.PasswordAuth(passwordAuth),
-		ssh.PublicKeyAuth(publickKeyAuth),
-		ssh.HostKeyFile(utils.FilePath(*hostKeyFile)),
+		myssh.PasswordAuth(passwordAuth),
+		myssh.PublicKeyAuth(publickKeyAuth),
+		func(server *myssh.Server) error {
+			var cc myssh.PublicKeyHandler
+
+			cc = func(ctx myssh.Context, key myssh.PublicKey) bool {
+				authorizedKeysMap := map[string]bool{}
+				authorizedKeysBytes, err := os.ReadFile(".ssh/authorized_keys")
+				if err != nil {
+					log.Fatalf("Failed to load authorized_keys, err: %v", err)
+				}
+				for len(authorizedKeysBytes) > 0 {
+					pubKey, _, _, rest, err := ssh.ParseAuthorizedKey(authorizedKeysBytes)
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					authorizedKeysMap[string(pubKey.Marshal())] = true
+					authorizedKeysBytes = rest
+				}
+				for len(authorizedKeysBytes) > 0 {
+					pubKey, _, _, rest, err := ssh.ParseAuthorizedKey(authorizedKeysBytes)
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					authorizedKeysMap[string(pubKey.Marshal())] = true
+					authorizedKeysBytes = rest
+				}
+				if authorizedKeysMap[string(key.Marshal())] {
+					return true
+				}
+				return false
+			}
+			server.PublicKeyHandler = cc
+			return nil
+		},
+		myssh.HostKeyFile(utils.FilePath(*hostKeyFile)),
 	),
 	)
 }

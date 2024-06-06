@@ -4,11 +4,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
-
 	"github.com/TNK-Studio/gortal/config"
 	"github.com/TNK-Studio/gortal/core/pui"
 	"github.com/TNK-Studio/gortal/core/sshd"
+	"github.com/TNK-Studio/gortal/passhs"
 	"github.com/TNK-Studio/gortal/utils"
 	"github.com/TNK-Studio/gortal/utils/logger"
 	"github.com/elfgzp/ssh"
@@ -16,7 +15,8 @@ import (
 )
 
 func init() {
-	config.ConfPath = flag.String("c", fmt.Sprintf("%s%s", os.Getenv("HOME"), "/.gortal.yml"), "Config file")
+	//config.ConfPath = flag.String("c", fmt.Sprintf("%s%s", os.Getenv("HOME"), "/.gortal.yml"), "Config file")
+	config.ConfPath = flag.String("c", fmt.Sprintf("%s", "./gortal.yml"), "Config file")
 }
 
 // Service Service
@@ -57,7 +57,9 @@ func VarifyUser(ctx ssh.Context, pass string) bool {
 	logger.Logger.Debugf("VarifyUser username: %s\n", username)
 	for _, user := range *config.Conf.Users {
 		// Todo Password hash
-		if user.Username == username && user.HashPasswd == pass {
+		pss := passhs.PasswordVerify(pass, user.HashPasswd)
+
+		if user.Username == username && pss {
 			return true
 		}
 	}
