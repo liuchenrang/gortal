@@ -21,3 +21,6 @@ __debug_bin
 vendor/*
 !vendor/vendor.json
 ./volumes
+gortal.yml
+lsshd
+.ssh
